@@ -1,0 +1,41 @@
+{
+  "name": "asmr-one-plus",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ASMR Online playback history, progress and local follows",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs --check"
+  },
+  "userscript": {
+    "name": "asmr.one plus",
+    "namespace": "asmr-one-plus",
+    "description": "为 asmr.one 提供播放进度保存、播放历史、本地关注和数据管理，并修正界面命名、补充播放器按钮提示。",
+    "match": [
+      "https://asmr.one/*",
+      "https://www.asmr.one/*",
+      "https://asmr-100.com/*",
+      "https://www.asmr-100.com/*",
+      "https://asmr-200.com/*",
+      "https://www.asmr-200.com/*",
+      "https://asmr-300.com/*",
+      "https://www.asmr-300.com/*"
+    ],
+    "grant": [
+      "GM_getValue",
+      "GM_setValue",
+      "GM_deleteValue",
+      "GM_addStyle",
+      "GM_registerMenuCommand",
+      "unsafeWindow"
+    ],
+    "run-at": "document-idle"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
