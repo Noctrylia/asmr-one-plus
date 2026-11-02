@@ -40,10 +40,10 @@ asmr.one 增强用户脚本，提供播放进度保存、播放历史、本地�
 ## 安装与更新
 
 1. 安装并启用 Tampermonkey，按浏览器提示开启用户脚本权限。
-2. 下载 [asmr-one-plus.user.js](./asmr-one-plus.user.js)，在 Tampermonkey 管理面板的“实用工具”中导入并确认安装。
+2. 打开 [Sleazy Fork 脚本页](https://sleazyfork.org/zh-CN/scripts/603419-asmr-one-plus)，点击“安装此脚本”并确认。
 3. 刷新网站，侧栏将新增“我的关注”“播放历史”和“数据管理”。
 
-更新时先导出备份，再覆盖安装新版脚本，无需卸载旧版。目前需手动更新。
+通过 Sleazy Fork 安装后，Tampermonkey 会按设置检查更新，也可在管理面板中手动检查，无需卸载旧版。
 
 ## 数据说明
 

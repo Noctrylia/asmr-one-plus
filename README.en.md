@@ -40,10 +40,10 @@ Hover hints are added to the player's bottom-row icons to explain the playback q
 ## Installation and updates
 
 1. Install and enable Tampermonkey. Follow your browser's instructions to enable userscripts.
-2. Download [asmr-one-plus.user.js](./asmr-one-plus.user.js), import it through **Utilities** in the Tampermonkey dashboard, and confirm installation.
+2. Open the [Sleazy Fork script page](https://sleazyfork.org/en/scripts/603419-asmr-one-plus), click **Install this script**, and confirm installation.
 3. Refresh the website. **Following**, **History**, and **Data management** will appear in the sidebar.
 
-Updates are currently manual. Export a backup first, then install the new version over the existing script without uninstalling it.
+After installation from Sleazy Fork, Tampermonkey checks for updates according to its settings. You can also check manually in the dashboard without uninstalling the script.
 
 ## Data
 
