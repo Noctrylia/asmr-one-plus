@@ -62,4 +62,4 @@ npm run build
 
 Source files are in `src/`. The build generates `asmr-one-plus.user.js` in the project root; this is the only file needed for installation. Maintain the version and userscript configuration in `package.json`.
 
-Reference: [asmr.one technology stack](./docs/site-stack.md) (Chinese).
+Reference: [asmr.one technology stack](./docs/site-stack.md).

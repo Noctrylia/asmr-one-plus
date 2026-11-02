@@ -1,8 +1,8 @@
-# asmr.one 技术栈
+# asmr.one Technology Stack
 
-调查日期：2026-11-01。
+Research date: 2026-11-01.
 
-| 技术 | 版本 |
+| Technology | Version |
 | --- | --- |
 | Vue | 2.7.16 |
 | Quasar | 1.22.2 |
@@ -13,6 +13,6 @@
 | Dexie | 4.4.2 |
 | lrc-file-parser | 1.2.7 |
 | vue-awesome-swiper | 4.1.1 |
-| vue-plyr | 版本未确认 |
-| Plyr | 3.8.2（推测） |
-| Webpack | 4.x（推测，精确版本未确认） |
+| vue-plyr | Version unconfirmed |
+| Plyr | 3.8.2 (inferred) |
+| Webpack | 4.x (inferred; exact version unconfirmed) |

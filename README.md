@@ -62,4 +62,4 @@ npm run build
 
 源码位于 `src/`，构建产物为根目录的 `asmr-one-plus.user.js`，安装仅需该文件。版本号和脚本配置统一在 `package.json` 中维护。
 
-维护参考：[asmr.one 技术栈](./docs/site-stack.md)。
+维护参考：[asmr.one 技术栈](./docs/site-stack.md)（英文）。
