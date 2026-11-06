@@ -7,6 +7,7 @@ import { favoritesStore } from "../follows/store.js";
 import { historyStore } from "../history/store.js";
 import { progressStore } from "../player/progress-store.js";
 import { ICONS, addNavItem, addPage } from "../ui/navigation.js";
+import { clearSoloWorksCache } from "../ui/solo-works.js";
 
 const DATA_PATH = '/script-data';
 
@@ -68,11 +69,12 @@ const dataManagementFeature = {
         }, tr('clearProgress'))),
         row(tr('clearAllHint'), el('button', {
           type: 'button', class: 'aop-btn aop-data-button aop-data-danger',
-          onclick: () => {
+          onclick: async () => {
             if (!pageWindow.confirm(tr('clearAllConfirm'))) return;
             historyStore.clear();
             progressStore.clearAll();
             favoritesStore.clear();
+            await clearSoloWorksCache();
             pageWindow.location.reload();
           },
         }, tr('clearAllMenu'))),

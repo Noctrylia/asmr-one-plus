@@ -4,7 +4,7 @@
 
 A userscript for asmr.one that saves playback progress and adds listening history, local follows, and data management.
 
-Current version: **1.0.0**
+Current version: **1.2.0**
 
 The interface follows the website's language setting and supports Simplified Chinese, Japanese, and English.
 
@@ -21,6 +21,16 @@ A work is added to history as soon as playback starts. History keeps the 200 mos
 ### Local follows
 
 Follow voice actors, tags, and circles you discover while listening, then return to their related works through **Following**. Supports groups, batch entry, and sorting by work count. Separate multiple names with semicolons when adding them in batches.
+
+### Solo performances
+
+When filtering works by a single voice actor, select **Solo performances only** next to the sort control. A full page appears as soon as enough solo works are found. The remaining cast lists load in the background, then the exact total and page numbers appear. Each page uses the selected page size, except the last page.
+
+Solo results load only while **Solo performances only** is enabled. Ordinary voice actor lists do not prefetch. Turning the filter off or leaving the list cancels unfinished loading. The last three complete searches are cached locally for five minutes, including across reloads. Expired results are fetched again. A first search without a cache still needs to wait for the API.
+
+Enabling the filter reuses data already loaded by the ordinary list and divides requests according to the total number of works, sharing at most four concurrent requests with the small first-page request. When existing data fills a page, it can appear without waiting for another response. Exact totals and complete pagination appear after the whole search finishes. [Performance measurements and API limits](./docs/solo-performance.md)
+
+Caches are separated by site, API, account, and search conditions. They exclude login tokens, collection marks, personal ratings, and backups. Collection shortcuts no longer prevent caching: current-page marks and personal ratings refresh separately in the background, with old marks hidden until fresh data arrives. Clearing all script data also clears the current site's solo search cache.
 
 ### Data management
 

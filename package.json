@@ -1,20 +1,21 @@
 {
   "name": "asmr-one-plus",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "ASMR Online playback history, progress and local follows",
+  "description": "Solo voice actor filtering, playback progress, listening history and local follows for asmr.one",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "test": "node --test scripts/test-solo.mjs",
     "check": "node scripts/build.mjs --check"
   },
   "userscript": {
     "name": "asmr.one plus",
     "namespace": "asmr-one-plus",
-    "description": "为 asmr.one 提供播放进度保存、播放历史、本地关注和数据管理，并修正界面命名、补充播放器按钮提示。",
+    "description": "为 asmr.one 提供单人出演筛选、播放进度保存、播放历史、本地关注和数据管理，并补充界面与播放器操作提示。",
     "match": [
       "https://asmr.one/*",
       "https://www.asmr.one/*",
@@ -33,7 +34,9 @@
       "GM_registerMenuCommand",
       "unsafeWindow"
     ],
-    "run-at": "document-idle"
+    "run-at": "document-idle",
+    "downloadURL": "https://update.sleazyfork.org/scripts/603419/asmrone%20plus.user.js",
+    "updateURL": "https://update.sleazyfork.org/scripts/603419/asmrone%20plus.meta.js"
   },
   "devDependencies": {
     "esbuild": "0.28.2"

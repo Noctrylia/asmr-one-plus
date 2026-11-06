@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         asmr.one plus
 // @namespace    asmr-one-plus
-// @version      1.0.0
-// @description  为 asmr.one 提供播放进度保存、播放历史、本地关注和数据管理，并修正界面命名、补充播放器按钮提示。
+// @version      1.2.0
+// @description  为 asmr.one 提供单人出演筛选、播放进度保存、播放历史、本地关注和数据管理，并补充界面与播放器操作提示。
 // @match        https://asmr.one/*
 // @match        https://www.asmr.one/*
 // @match        https://asmr-100.com/*
@@ -18,13 +18,15 @@
 // @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // @run-at       document-idle
+// @downloadURL  https://update.sleazyfork.org/scripts/603419/asmrone%20plus.user.js
+// @updateURL    https://update.sleazyfork.org/scripts/603419/asmrone%20plus.meta.js
 // ==/UserScript==
 
 /*! 自动构建文件。维护入口：src/main.js；修改 src/ 后运行 npm run build，请勿直接修改本文件。 */
 'use strict';
 (() => {
   /*! 版本号由构建脚本从 package.json 注入；不要在源码中另写一份版本号。 */
-  var SCRIPT_VERSION = "1.0.0";
+  var SCRIPT_VERSION = "1.2.0";
   /*! 网站接入与通用 DOM 工具。当前依赖 Vue 2 的 #q-app.__vue__，网站升级框架时需先检查此处。 */
   var LOG_PREFIX = "[asmr.one plus]";
   var log = (...args) => console.log(LOG_PREFIX, ...args);
@@ -122,6 +124,9 @@
       historyEmpty: "还没有播放记录，播放任意作品后会出现在这里",
       following: "我的关注",
       typeLabel: { va: "声优", tag: "标签", circle: "社团" },
+      soloWorksOnly: "仅单人出演",
+      soloWorksLoading: "正在整理单人作品…",
+      soloWorksLoadingPages: "正在计算总数和页码…",
       inbox: "默认分组",
       tab: (label, n) => `${label}（${n}）`,
       followHint: (type) => `悬停${type}，点右上角 ☆ 关注，或点“＋ 添加”`,
@@ -233,6 +238,9 @@
       historyEmpty: "まだ再生履歴がありません。作品を再生するとここに表示されます",
       following: "フォロー中",
       typeLabel: { va: "声優", tag: "タグ", circle: "サークル" },
+      soloWorksOnly: "単独出演のみ",
+      soloWorksLoading: "単独出演作品を読み込み中…",
+      soloWorksLoadingPages: "作品数とページ数を集計中…",
       inbox: "デフォルト",
       tab: (label, n) => `${label}（${n}）`,
       followHint: (type) => `${type}にカーソルを合わせて右上の ☆、または「＋ 追加」でフォロー`,
@@ -345,6 +353,9 @@
       following: "Following",
       typeLabel: { va: "Voice actors", tag: "Tags", circle: "Circles" },
       typeNoun: { va: "voice actor", tag: "tag", circle: "circle" },
+      soloWorksOnly: "Solo performances only",
+      soloWorksLoading: "Loading solo works…",
+      soloWorksLoadingPages: "Calculating totals and page numbers…",
       inbox: "Default",
       tab: (label, n) => `${label} (${n})`,
       followHint: (type) => `Hover over a ${type} and click the ☆ in its corner, or use “+ Add”`,
@@ -1777,6 +1788,591 @@ ${tr("resetCurrentNotice")}` : "";
       return [menu];
     }
   };
+  /*! 完整搜索快照：异步保存在当前站点的 IndexedDB，不写入个人数据备份。 */
+  var CACHE_TTL = 5 * 60 * 1e3;
+  var CACHE_LIMIT = 3;
+  var memory = new Map();
+  var database;
+  var generation = 0;
+  function openCache() {
+    if (!database) database = new Promise((resolve) => {
+      try {
+        const request = pageWindow.indexedDB.open("asmr-one-plus-solo", 1);
+        let expired = false;
+        const timeout = setTimeout(() => {
+          expired = true;
+          resolve(null);
+        }, 200);
+        request.onupgradeneeded = () => request.result.createObjectStore("searches", { keyPath: "key" });
+        request.onerror = request.onblocked = () => {
+          clearTimeout(timeout);
+          resolve(null);
+        };
+        request.onsuccess = () => {
+          clearTimeout(timeout);
+          const db = request.result;
+          if (expired) {
+            db.close();
+            return;
+          }
+          db.onversionchange = () => {
+            db.close();
+            database = null;
+          };
+          resolve(db);
+        };
+      } catch {
+        resolve(null);
+      }
+    });
+    return database;
+  }
+  function valid(entry) {
+    return entry && Number.isFinite(entry.createdAt) && Date.now() >= entry.createdAt && Date.now() - entry.createdAt < CACHE_TTL && Array.isArray(entry.result?.works) && Number.isSafeInteger(entry.result.pagination?.totalCount) && Array.isArray(entry.result.sourcePositions) && entry.result.sourcePositions.length === entry.result.works.length && entry.result.sourcePositions.every((position, i, positions) => Number.isSafeInteger(position) && position >= 0 && position < entry.result.pagination.totalCount && (i === 0 || position > positions[i - 1]));
+  }
+  function remember(entry) {
+    memory.delete(entry.key);
+    memory.set(entry.key, entry);
+    while (memory.size > CACHE_LIMIT) memory.delete(memory.keys().next().value);
+  }
+  function publicResult(result) {
+    const works = result.works.map(({ playlistStatus, userRating, progress, review_text, ...work }) => ({ ...work, playlistStatus: null, userRating: null }));
+    return { ...result, works };
+  }
+  async function readSoloCache(key) {
+    const local = memory.get(key);
+    if (valid(local)) {
+      remember(local);
+      return publicResult(local.result);
+    }
+    memory.delete(key);
+    const epoch = generation;
+    const db = await openCache();
+    if (!db || epoch !== generation) return null;
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => resolve(null), 200);
+      const done = (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      };
+      try {
+        const request = db.transaction("searches").objectStore("searches").get(key);
+        request.onerror = () => done(null);
+        request.onsuccess = () => {
+          const entry = request.result;
+          if (epoch !== generation || !valid(entry)) return done(null);
+          remember(entry);
+          done(publicResult(entry.result));
+        };
+      } catch {
+        done(null);
+      }
+    });
+  }
+  async function writeSoloCache(key, result) {
+    const entry = { key, result: publicResult(result), createdAt: Date.now() };
+    remember(entry);
+    const epoch = generation;
+    const db = await openCache();
+    if (!db || epoch !== generation) return;
+    await new Promise((resolve) => {
+      try {
+        const transaction = db.transaction("searches", "readwrite");
+        transaction.oncomplete = transaction.onerror = transaction.onabort = resolve;
+        const store = transaction.objectStore("searches");
+        store.put(entry);
+        const request = store.getAll();
+        request.onsuccess = () => {
+          const entries = request.result.sort((a, b) => b.createdAt - a.createdAt);
+          entries.forEach((item, i) => {
+            if (i >= CACHE_LIMIT || !valid(item)) store.delete(item.key);
+          });
+        };
+      } catch {
+        resolve();
+      }
+    });
+  }
+  async function clearSoloCache() {
+    generation++;
+    memory.clear();
+    const db = await openCache();
+    if (!db) return;
+    await new Promise((resolve) => {
+      try {
+        const transaction = db.transaction("searches", "readwrite");
+        transaction.oncomplete = transaction.onerror = transaction.onabort = resolve;
+        transaction.objectStore("searches").clear();
+      } catch {
+        resolve();
+      }
+    });
+  }
+  async function removeSoloCache(key) {
+    memory.delete(key);
+    const db = await openCache();
+    if (!db) return;
+    await new Promise((resolve) => {
+      try {
+        const transaction = db.transaction("searches", "readwrite");
+        transaction.oncomplete = transaction.onerror = transaction.onabort = resolve;
+        transaction.objectStore("searches").delete(key);
+      } catch {
+        resolve();
+      }
+    });
+  }
+  /*! 单人出演：按原站顺序收集单人作品，再把真实总数和当前页交给原站分页器。 */
+  var SOLO_QUERY = "aopSolo";
+  var SOURCE_PAGE_SIZE = 999;
+  var SOURCE_CONCURRENCY = 4;
+  var sharedIndex = null;
+  function hasSingleActor(owner) {
+    if (owner.$route?.path !== "/works") return false;
+    const terms = owner.parsedKeyword?.specialTerms || [];
+    const actors = new Set(terms.filter(({ namespace, isExclude, value }) => (namespace === "va" || namespace === "v") && !isExclude && value).map(({ value }) => value));
+    return actors.size === 1;
+  }
+  function soloEnabled(owner) {
+    return owner.$route?.query?.[SOLO_QUERY] === "1" && hasSingleActor(owner);
+  }
+  function isSoloWork(work) {
+    return Array.isArray(work?.vas) && work.vas.length === 1 && Boolean(work.vas[0]?.name);
+  }
+  function searchQuery(owner) {
+    const { page, pageSize, ...params } = owner.requestParams;
+    return { page, pageSize: Number(pageSize), params, key: JSON.stringify([getApiBase(owner), owner.loggedIn, owner.userName, params]) };
+  }
+  async function loadSoloWorks(owner, params, token, onProgress, previewSize, seed = null) {
+    token.throwIfRequested();
+    const request = owner.$options.methods.makeMainRequest;
+    const { keyword, globalFilter } = owner;
+    const fetchPage = async (page, size) => {
+      token.throwIfRequested();
+      const context = Object.create(owner, {
+        keyword: { value: keyword },
+        globalFilter: { value: globalFilter },
+        requestParams: { value: { ...params, withPlaylistStatus: [], page, pageSize: size } }
+      });
+      try {
+        return await request.call(context, token);
+      } catch (error) {
+        if (size <= 400 || error.response?.status !== 400 || !error.response.data?.errors?.some((item) => item.param === "pageSize")) throw error;
+        return fetchPage(page, size > 500 ? 500 : 400);
+      }
+    };
+    const validPagination = (data) => Number.isSafeInteger(data?.pagination?.totalCount) && data.pagination.totalCount >= 0 && Number.isInteger(data.pagination.pageSize) && data.pagination.pageSize >= 1;
+    const validRows = (data, page, size, total) => {
+      token.throwIfRequested();
+      if (data.pagination?.currentPage !== page || data.pagination.pageSize !== size || data.pagination.totalCount !== total || !Array.isArray(data.works) || data.works.length !== Math.max(0, Math.min(size, total - (page - 1) * size))) {
+        throw new Error("读取单人作品时搜索结果发生变化");
+      }
+      return data.works;
+    };
+    if (seed && (!validPagination(seed) || !Array.isArray(seed.works))) seed = null;
+    let initialFetched = false;
+    if (!seed) {
+      const { data } = await fetchPage(1, previewSize || 400);
+      if (!validPagination(data)) throw new Error("单人作品搜索返回了无效的分页数据");
+      seed = data;
+      initialFetched = true;
+    }
+    let prefix = [];
+    if (seed?.pagination.currentPage === 1) {
+      prefix = validRows(seed, 1, seed.pagination.pageSize, seed.pagination.totalCount).filter(isSoloWork);
+      onProgress(prefix);
+      if (seed.works.length === seed.pagination.totalCount) {
+        if (new Set(seed.works.map((work) => work?.id)).size !== seed.works.length || seed.works.some((work) => work?.id == null)) {
+          throw new Error("搜索结果出现重复或无效的作品编号");
+        }
+        return { works: prefix, sourcePositions: seed.works.flatMap((work, i) => isSoloWork(work) ? [i] : []), pagination: seed.pagination };
+      }
+    }
+    const needPreview = !initialFetched && previewSize && prefix.length < 20 && seed.pagination.totalCount > previewSize;
+    let pageSize = Math.min(SOURCE_PAGE_SIZE, Math.max(100, Math.ceil(seed.pagination.totalCount / (SOURCE_CONCURRENCY - (needPreview ? 1 : 0)))));
+    let pageCount = Math.ceil(seed.pagination.totalCount / pageSize);
+    let totalCount;
+    let firstPagination;
+    let firstError;
+    let established = false;
+    let signalFirst;
+    const firstDone = new Promise((resolve) => {
+      signalFirst = resolve;
+    });
+    const works = [];
+    const sourcePositions = [];
+    const seen = new Set();
+    const pending = new Map();
+    let committed = 1;
+    let next = 2;
+    const commit = (page, rows) => {
+      pending.set(page, rows);
+      while (pending.has(committed)) {
+        for (const work of pending.get(committed)) {
+          if (work?.id == null || seen.has(work.id)) throw new Error("搜索结果出现重复或无效的作品编号");
+          seen.add(work.id);
+          if (isSoloWork(work)) {
+            works.push(work);
+            sourcePositions.push(seen.size - 1);
+          }
+        }
+        pending.delete(committed++);
+        onProgress(works);
+      }
+    };
+    const rest = async () => {
+      while (true) {
+        token.throwIfRequested();
+        if (next > pageCount) {
+          if (established) return;
+          await firstDone;
+          if (firstError) throw firstError;
+          continue;
+        }
+        const page = next++;
+        const response = await fetchPage(page, pageSize);
+        await firstDone;
+        if (firstError) throw firstError;
+        commit(page, validRows(response.data, page, pageSize, totalCount));
+      }
+    };
+    const main2 = async () => {
+      try {
+        const size = pageSize;
+        const { data } = await fetchPage(1, size);
+        if (!validPagination(data) || data.pagination.pageSize > size) throw new Error("单人作品搜索返回了无效的分页数据");
+        totalCount = data.pagination.totalCount;
+        pageSize = data.pagination.pageSize;
+        firstPagination = data.pagination;
+        pageCount = Math.ceil(totalCount / pageSize);
+        commit(1, validRows(data, 1, pageSize, totalCount));
+        established = true;
+      } catch (error) {
+        firstError = error;
+        throw error;
+      } finally {
+        signalFirst();
+      }
+      await rest();
+    };
+    const foreground = async () => {
+      if (needPreview) {
+        try {
+          const { data } = await fetchPage(1, previewSize);
+          if (!established && validPagination(data) && data.pagination.pageSize <= previewSize && (!seed || data.pagination.totalCount === seed.pagination.totalCount)) {
+            onProgress(validRows(data, 1, data.pagination.pageSize, data.pagination.totalCount).filter(isSoloWork));
+          }
+        } catch {
+          token.throwIfRequested();
+        }
+      }
+      await rest();
+    };
+    await Promise.all([main2(), foreground(), ...Array.from({ length: SOURCE_CONCURRENCY - 2 }, () => rest())]);
+    token.throwIfRequested();
+    return { works, sourcePositions, pagination: firstPagination };
+  }
+  async function refreshPageState(owner, result, start, rows, token, isCurrent) {
+    const { params } = searchQuery(owner);
+    const { keyword, globalFilter } = owner;
+    const size = Math.min(100, result.pagination.pageSize);
+    const pages = [...new Set(result.sourcePositions.slice(start, start + rows.length).map((position) => Math.floor(position / size) + 1))];
+    const fresh = new Map();
+    let next = 0;
+    const worker = async () => {
+      while (next < pages.length) {
+        token.throwIfRequested();
+        const page = pages[next++];
+        const context = Object.create(owner, {
+          keyword: { value: keyword },
+          globalFilter: { value: globalFilter },
+          requestParams: { value: { ...params, page, pageSize: size } }
+        });
+        const response = await owner.$options.methods.makeMainRequest.call(context, token);
+        token.throwIfRequested();
+        const { pagination, works } = response.data;
+        if (pagination?.currentPage !== page || pagination.pageSize !== size || pagination.totalCount !== result.pagination.totalCount || !Array.isArray(works)) return false;
+        for (const work of works) fresh.set(work.id, work);
+      }
+      return true;
+    };
+    const valid2 = (await Promise.all([worker(), worker()])).every(Boolean) && rows.every((work) => isSoloWork(fresh.get(work.id)));
+    if (!isCurrent()) return true;
+    if (!valid2) return false;
+    for (const work of rows) {
+      const update = fresh.get(work.id);
+      work.playlistStatus = update.playlistStatus ?? null;
+      work.userRating = update.userRating ?? null;
+    }
+    return true;
+  }
+  function bindWorks(owner, schedule) {
+    const state = { index: null };
+    const nativeRequest = owner.makeMainRequest;
+    let stateRefresh;
+    let nativeSnapshot;
+    const captureNative = (data, key) => {
+      const pagination = data?.pagination;
+      if (!Array.isArray(data?.works) || !Number.isSafeInteger(pagination?.totalCount) || pagination.totalCount < 0 || !Number.isSafeInteger(pagination.currentPage) || pagination.currentPage < 1 || !Number.isSafeInteger(pagination.pageSize) || pagination.pageSize < 1 || data.works.length !== Math.max(0, Math.min(pagination.pageSize, pagination.totalCount - (pagination.currentPage - 1) * pagination.pageSize))) return;
+      nativeSnapshot = { data: { ...data, works: data.works.slice() }, key, createdAt: Date.now() };
+    };
+    if (!soloEnabled(owner) && !owner.loading) captureNative({ works: owner.works, pagination: owner.pagination }, searchQuery(owner).key);
+    const discard = () => {
+      const index = state.index;
+      if (index?.previewOwner === owner) index.showPage = null;
+      if (index && !index.ready) index.source.cancel("Solo search changed");
+      state.index = null;
+    };
+    const prepare = () => {
+      const { page, pageSize, params, key } = searchQuery(owner);
+      if (state.index?.source.token.reason) discard();
+      if (state.index?.key !== key) {
+        discard();
+        if (sharedIndex?.key === key && !sharedIndex.source.token.reason) {
+          state.index = sharedIndex;
+        } else {
+          if (sharedIndex) sharedIndex.source.cancel("Another solo search started");
+          const source = owner.$axios.CancelToken.source();
+          const index = { key, source, ready: false, works: [], showPage: null };
+          state.index = index;
+          sharedIndex = index;
+          const firstSize = page === 1 && pageSize <= 20 ? 100 : 0;
+          index.result = (async () => {
+            const cached = await readSoloCache(key);
+            source.token.throwIfRequested();
+            if (searchQuery(owner).key !== key) throw new Error("Solo search changed");
+            if (cached) {
+              index.fromCache = true;
+              return cached;
+            }
+            const seed = nativeSnapshot?.key === key && Date.now() - nativeSnapshot.createdAt < 3e4 ? nativeSnapshot.data : null;
+            const result = await loadSoloWorks(owner, params, source.token, (works) => {
+              index.works = works;
+              index.showPage?.();
+            }, firstSize, seed);
+            void writeSoloCache(key, result);
+            return result;
+          })().then((result) => {
+            index.ready = true;
+            index.works = result.works;
+            return result;
+          }, (err) => {
+            source.cancel("Solo search failed");
+            throw err;
+          }).finally(() => {
+            if (sharedIndex === index) sharedIndex = null;
+            schedule();
+          });
+          index.result.catch(() => {
+          });
+        }
+        schedule();
+      }
+      return state.index;
+    };
+    const requestSolo = async (token) => {
+      const { page, pageSize, key } = searchQuery(owner);
+      prepare();
+      const index = state.index;
+      const offset = (page - 1) * pageSize;
+      let shown = false;
+      const stillOnPage = () => {
+        if (token.reason || owner._isDestroyed || !soloEnabled(owner)) return false;
+        const current = searchQuery(owner);
+        return current.key === key && current.page === page && current.pageSize === pageSize;
+      };
+      const showPage = () => {
+        if (shown || index.works.length < offset + pageSize || !stillOnPage()) return;
+        owner.works = index.works.slice(offset, offset + pageSize);
+        owner.loading = false;
+        shown = true;
+        schedule();
+      };
+      if (!index.ready) {
+        index.previewOwner = owner;
+        index.showPage = showPage;
+        showPage();
+      }
+      let result;
+      try {
+        result = await index.result;
+      } catch (err) {
+        if (shown && index.showPage === showPage && stillOnPage()) owner.works = [];
+        if (state.index === index) discard();
+        throw err;
+      } finally {
+        if (index.showPage === showPage) index.showPage = null;
+        token.throwIfRequested();
+      }
+      const last = Math.max(1, Math.ceil(result.works.length / pageSize));
+      const currentPage = Math.min(Math.max(1, page), last);
+      if (currentPage !== page && stillOnPage()) {
+        const { path, query, hash } = owner.$route;
+        owner.$router.replace({ path, query: { ...query, page: currentPage }, hash }).catch(() => {
+        });
+      }
+      const start = (currentPage - 1) * pageSize;
+      const rows = result.works.slice(start, start + pageSize);
+      if (rows.length && (index.fromCache && owner.loggedIn || owner.requestParams.withPlaylistStatus?.length)) {
+        const refresh = owner.$axios.CancelToken.source();
+        stateRefresh = refresh;
+        void refreshPageState(
+          owner,
+          result,
+          start,
+          rows,
+          refresh.token,
+          () => !refresh.token.reason && state.index === index && stillOnPage()
+        ).then(async (valid2) => {
+          if (valid2 || refresh.token.reason) return;
+          await removeSoloCache(key);
+          if (state.index !== index || !stillOnPage()) return;
+          discard();
+          owner.requestWorksQueue(false);
+        }).catch((err) => {
+          if (!refresh.token.reason) console.warn(LOG_PREFIX, "单人作品当前页标记刷新失败", err);
+        });
+      }
+      return {
+        data: {
+          works: rows,
+          pagination: { ...result.pagination, currentPage, pageSize, totalCount: result.works.length }
+        }
+      };
+    };
+    owner.makeMainRequest = function(token) {
+      stateRefresh?.cancel("Page changed");
+      if (!soloEnabled(owner)) {
+        if (state.index && !state.index.ready) discard();
+        return nativeRequest.call(this, token);
+      }
+      return requestSolo(token);
+    };
+    owner.$watch(() => [soloEnabled(owner), searchQuery(owner).key], ([enabled, key], [wasEnabled]) => {
+      stateRefresh?.cancel("Search changed");
+      if (state.index && (state.index.key !== key || !hasSingleActor(owner) || !enabled && !state.index.ready)) discard();
+      if (enabled !== wasEnabled && owner.$route?.path === "/works") owner.requestWorksQueue();
+      schedule();
+    });
+    owner.$watch(() => owner.loading, (loading) => {
+      if (!loading && hasSingleActor(owner) && !soloEnabled(owner)) {
+        captureNative({ works: owner.works, pagination: owner.pagination }, searchQuery(owner).key);
+      }
+    });
+    owner.$once("hook:beforeDestroy", () => {
+      stateRefresh?.cancel("Page closed");
+      discard();
+    });
+    if (soloEnabled(owner)) owner.requestWorksQueue();
+    return state;
+  }
+  function worksOwner(heading) {
+    for (let node = heading; node; node = node.parentElement) {
+      for (let owner = node.__vue__; owner; owner = owner.$parent) {
+        if (owner.$options?.name === "Works" && typeof owner.$options.methods?.makeMainRequest === "function" && typeof owner.requestWorksQueue === "function" && typeof owner.$axios?.CancelToken?.source === "function") return owner;
+      }
+    }
+    return null;
+  }
+  var soloWorksFeature = {
+    name: "solo works",
+    init(vm) {
+      GM_addStyle(`
+      .row.aop-solo-toolbar { justify-content: flex-start; align-items: center; gap: 6px 10px; }
+      .aop-solo-toolbar > :last-child { margin-inline-start: auto; }
+      .aop-solo-works { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        min-height: 36px; padding: 0 12px; border: 1px solid rgba(0, 0, 0, .24); border-radius: 20px;
+        background: transparent; color: inherit; font: inherit; white-space: nowrap; cursor: pointer; }
+      .body--dark .aop-solo-works { border-color: rgba(255, 255, 255, .4); }
+      .aop-solo-works .material-icons { font-size: 18px; }
+      .aop-solo-works:hover { background: rgba(127, 127, 127, .1); }
+      .aop-solo-works[aria-pressed="true"] { color: var(--q-color-primary, #1976d2); border-color: currentColor;
+        background: rgba(25, 118, 210, .1); }
+      .body--dark .aop-solo-works[aria-pressed="true"] { color: #90caf9; }
+      .aop-solo-works:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+      .aop-solo-indexing h1.text-h5 + span,
+      .aop-solo-indexing .q-page > .q-mt-lg.q-mb-xl.text-center,
+      .aop-solo-indexing .q-page > .q-pt-lg.q-pb-md.flex-center { display: none !important; }
+    `);
+      const doc = pageWindow.document;
+      const bindings = new WeakMap();
+      let mountedToolbar;
+      let indexingRoot;
+      const label = el("span");
+      const loading = el("span", { class: "text-caption", role: "status" });
+      const control = el("button", { type: "button", class: "aop-solo-works", onkeydown: (event) => {
+        if (event.key === " " || event.key === "Enter") event.stopPropagation();
+      }, onclick: () => {
+        const route = vm.$route;
+        if (route.path !== "/works" || !mountedToolbar) return;
+        const query = { ...route.query };
+        delete query.page;
+        if (query[SOLO_QUERY] === "1") delete query[SOLO_QUERY];
+        else query[SOLO_QUERY] = "1";
+        vm.$router.push({ path: route.path, query, hash: route.hash }).catch(() => {
+        });
+      } }, [el("i", { class: "material-icons", "aria-hidden": "true" }, "person"), label]);
+      const ensure = () => {
+        const route = vm.$route;
+        const heading = route?.path === "/works" && doc.querySelector(".q-page-container h1.text-h5");
+        const owner = heading && worksOwner(heading);
+        let state;
+        if (owner && hasSingleActor(owner)) {
+          if (!bindings.has(owner)) bindings.set(owner, bindWorks(owner, schedule));
+          state = bindings.get(owner);
+        }
+        const enabled = Boolean(state && soloEnabled(owner));
+        const toolbar = state && heading.parentElement.nextElementSibling?.querySelector(".q-page > .row.justify-between");
+        if (toolbar !== mountedToolbar) {
+          mountedToolbar?.classList.remove("aop-solo-toolbar");
+          mountedToolbar = toolbar || null;
+        }
+        if (toolbar?.firstElementChild) {
+          toolbar.classList.add("aop-solo-toolbar");
+          if (toolbar.firstElementChild.nextElementSibling !== control) toolbar.firstElementChild.after(control);
+          control.setAttribute("aria-pressed", String(enabled));
+          const text = tr("soloWorksOnly");
+          if (label.textContent !== text) label.textContent = text;
+        } else {
+          control.remove();
+        }
+        const indexing = Boolean(enabled && state.index && !state.index.ready);
+        const root = indexing ? owner.$el : null;
+        if (root !== indexingRoot) {
+          indexingRoot?.classList.remove("aop-solo-indexing");
+          indexingRoot = root;
+          indexingRoot?.classList.add("aop-solo-indexing");
+        }
+        if (toolbar?.firstElementChild && indexing) {
+          const text = tr(owner.works.length ? "soloWorksLoadingPages" : "soloWorksLoading");
+          if (loading.textContent !== text) loading.textContent = text;
+          if (control.nextElementSibling !== loading) control.after(loading);
+        } else loading.remove();
+      };
+      let scheduled = false;
+      const schedule = () => {
+        if (scheduled || !mountedToolbar && vm.$route?.path !== "/works") return;
+        scheduled = true;
+        pageWindow.requestAnimationFrame(() => {
+          scheduled = false;
+          try {
+            ensure();
+          } catch (err) {
+            console.error(LOG_PREFIX, "单人出演筛选", err);
+          }
+        });
+      };
+      new MutationObserver(schedule).observe(doc.body, { childList: true, subtree: true });
+      vm.$watch(() => vm.$route, schedule);
+      onLocaleChange(schedule);
+      schedule();
+    }
+  };
+  async function clearSoloWorksCache() {
+    sharedIndex?.source.cancel("Solo cache cleared");
+    sharedIndex = null;
+    await clearSoloCache();
+  }
   /*! 数据管理独立页面：备份的唯一界面入口，并提供全部进度/全部脚本数据的清除操作。 */
   var DATA_PATH = "/script-data";
   var dataManagementFeature = {
@@ -1841,11 +2437,12 @@ ${tr("resetCurrentNotice")}` : "";
           row(tr("clearAllHint"), el("button", {
             type: "button",
             class: "aop-btn aop-data-button aop-data-danger",
-            onclick: () => {
+            onclick: async () => {
               if (!pageWindow.confirm(tr("clearAllConfirm"))) return;
               historyStore.clear();
               progressStore.clearAll();
               favoritesStore.clear();
+              await clearSoloWorksCache();
               pageWindow.location.reload();
             }
           }, tr("clearAllMenu")))
@@ -2766,7 +3363,7 @@ ${tr("resetCurrentNotice")}` : "";
   "use strict";
   function main() {
     if (pageWindow.location.protocol !== "https:" || !Object.hasOwn(SITE_API_KEYS, siteHost)) return;
-    const features = [siteRenameFeature, progressFeature, favoritesFeature, playlistRemoveFeature, playerHintsFeature, dataManagementFeature];
+    const features = [siteRenameFeature, progressFeature, favoritesFeature, soloWorksFeature, playlistRemoveFeature, playerHintsFeature, dataManagementFeature];
     pageWindow.document.documentElement.setAttribute("data-asmr-one-plus-version", SCRIPT_VERSION);
     log(`脚本 ${SCRIPT_VERSION} 已注入，等待网站加载…`);
     GM_addStyle(BASE_CSS);
